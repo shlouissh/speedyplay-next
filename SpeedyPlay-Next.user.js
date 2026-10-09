@@ -5,9 +5,10 @@
 // @description  HTML5 视频倍速控制器：0.1～20 倍、记忆速度、常用速度、面板位置与动态视频支持
 // @author       shlouissh
 // @license      MIT
+// @icon         https://raw.githubusercontent.com/shlouissh/speedyplay-next/main/speedyplay-icon.png?v=2
 // @match        *://*/*
 // @grant        none
-// @run-at       document-start
+// @run-at       document-idle
 // ==/UserScript==
 
 (() => {
@@ -19,7 +20,7 @@
   const DEFAULTS = {
     rate: 1,
     previousRate: 1,
-    presets: [1, 1.25, 1.5, 1.75, 2],
+    presets: [1, 1.25, 1.5, 2, 3],
     x: null,
     y: 100,
     collapsed: false
@@ -130,12 +131,29 @@
     applyRate(video, settings.rate);
   }
 
-  function scanVideos(root = document) {
-    if (root instanceof HTMLVideoElement) trackVideo(root);
-    if (root.querySelectorAll) {
-      root.querySelectorAll('video').forEach(trackVideo);
+    function scanVideos(root = document) {
+        const videos = [];
+
+        if (root instanceof HTMLVideoElement) {
+            videos.push(root);
+        }
+
+        if (root.querySelectorAll) {
+            videos.push(...root.querySelectorAll('video'));
+        }
+
+        if (videos.length > 0) {
+            console.log('[倍速播放 Next] 发现视频：', videos.length);
+
+            try {
+                createPanel();
+            } catch (error) {
+                console.error('[倍速播放 Next] 创建面板失败：', error);
+            }
+
+            videos.forEach(trackVideo);
+        }
     }
-  }
 
   function observePage() {
     scanVideos();
@@ -162,6 +180,7 @@
   }
 
   function createPanel() {
+    console.log('[倍速播放 Next] 开始创建面板', location.href);
     if (panelHost || !document.documentElement) return;
 
     panelHost = document.createElement('div');
@@ -169,14 +188,14 @@
     panelHost.style.cssText = 'position:fixed;z-index:2147483647;left:0;top:0;';
     shadow = panelHost.attachShadow({ mode: 'open' });
 
-    shadow.innerHTML = `
+    const panelHTML = `
       <style>
         :host { all: initial; }
         * { box-sizing: border-box; }
         .panel {
           position: fixed; left: var(--x, auto); top: var(--y, 100px);
           right: var(--right, 18px); width: 260px; color: #f5f5f5;
-          background: rgba(27, 29, 34, .96);
+          background: rgba(27, 29, 34, 0.6);//最后的0.6为透明度
           border: 1px solid rgba(255,255,255,.16);
           border-radius: 12px; box-shadow: 0 8px 28px rgba(0,0,0,.28);
           font: 13px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -228,7 +247,7 @@
           <span class="brand">倍速播放 Next</span>
           <div class="header-actions">
             <button id="collapse" title="折叠面板">−</button>
-            <button id="hide" title="隐藏面板">×</button>
+            <button id="hide" title="隐藏面板，会显示“倍速”在右下角">×</button>
           </div>
         </div>
         <div class="body" id="body">
@@ -261,8 +280,113 @@
         </div>
       </section>
     `;
+// 1. 提取原有 CSS，无须重新编写样式
+const css = panelHTML.match(/<style>([\s\S]*?)<\/style>/)?.[1] || '';
+
+const style = document.createElement('style');
+style.textContent = css;
+shadow.appendChild(style);
+
+// 2. 使用 DOM API 安全地创建元素，避免 TrustedHTML 限制
+function el(tag, attrs = {}, children = []) {
+  const node = document.createElement(tag);
+
+  for (const [key, value] of Object.entries(attrs)) {
+    if (key === 'text') {
+      node.textContent = value;
+    } else {
+      node.setAttribute(key, value);
+    }
+  }
+
+  for (const child of children) {
+    node.appendChild(
+      typeof child === 'string'
+        ? document.createTextNode(child)
+        : child
+    );
+  }
+
+  return node;
+}
+
+const button = (id, text, title) =>
+  el('button', { id, text, ...(title ? { title } : {}) });
+
+// 3. 重建原有面板结构，保留所有按钮 ID
+const panel = el('section', {
+  class: 'panel',
+  'aria-label': '倍速播放控制面板'
+}, [
+  el('div', { class: 'header', id: 'drag-handle' }, [
+    el('span', { class: 'brand', text: '倍速播放 Next' }),
+    el('div', { class: 'header-actions' }, [
+      button('collapse', '−', '折叠面板'),
+      button('hide', '×', '隐藏面板')
+    ])
+  ]),
+
+  el('div', { class: 'body', id: 'body' }, [
+    el('div', { class: 'rate-row' }, [
+      el('div', {}, [
+        el('div', { class: 'small', text: '当前速度' }),
+        el('div', { class: 'rate', id: 'rate', text: '1×' })
+      ]),
+      button('toggle', '切换上次', '切换到上一次使用的速度')
+    ]),
+
+    el('input', {
+      id: 'slider',
+      type: 'range',
+      min: '0.1',
+      max: '4',
+      step: '0.1',
+      value: '1',
+      'aria-label': '播放速度'
+    }),
+
+    el('div', { class: 'controls' }, [
+      button('minus', '− 0.1'),
+      button('normal', '1× 正常'),
+      button('plus', '+ 0.1')
+    ]),
+
+    el('div', {
+      class: 'small',
+      text: '常用速度（最多 6 个）'
+    }),
+
+    el('div', { class: 'presets', id: 'presets' }),
+
+    el('div', { class: 'edit-row' }, [
+      el('input', {
+        id: 'custom',
+        type: 'number',
+        min: '0.1',
+        max: '20',
+        step: '0.1',
+        value: '1',
+        'aria-label': '自定义速度'
+      }),
+      button('apply-custom', '应用'),
+      button('add-preset', '＋常用')
+    ]),
+
+    el('div', { class: 'footer' }, [
+      el('span', {
+        class: 'small',
+        id: 'status',
+        text: '自动应用到页面视频'
+      }),
+      button('reset', '重置位置')
+    ])
+  ])
+]);
+
+shadow.appendChild(panel);
 
     document.documentElement.appendChild(panelHost);
+      console.log('[倍速播放 Next] 面板已经插入网页');
     bindUI();
     placePanel();
     updateUI();
@@ -490,13 +614,23 @@
     document.documentElement.appendChild(button);
   }
 
-  function init() {
-    observePage();
-    createPanel();
+    function init() {
+        console.log('[倍速播放 Next] 脚本开始初始化');
 
-    // 页面后续动态插入的视频会由 MutationObserver 发现。
-    applyRateToAll(settings.rate);
-  }
+        try {
+            if (window.top !== window.self) {
+                console.log('[倍速播放 Next] 当前为 iframe，跳过');
+                return;
+            }
+
+            observePage();
+            applyRateToAll(settings.rate);
+
+            console.log('[倍速播放 Next] 初始化完成');
+        } catch (error) {
+            console.error('[倍速播放 Next] 初始化失败：', error);
+        }
+    }
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init, { once: true });
