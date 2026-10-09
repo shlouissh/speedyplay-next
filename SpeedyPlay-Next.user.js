@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         倍速播放 Next
-// @namespace    https://github.com/your-name/speedyplay-next
+// @namespace    https://github.com/shlouissh/speedyplay-next
 // @version      1.0.0
 // @description  HTML5 视频倍速控制器：0.1～20 倍、记忆速度、常用速度、面板位置与动态视频支持
 // @author       shlouissh
