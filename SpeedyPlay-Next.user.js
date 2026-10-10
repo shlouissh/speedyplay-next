@@ -389,7 +389,7 @@
          $('#status').textContent = '已应用播放速度';
        }
      });
-     });
+
      $('#custom').addEventListener('keydown', e => {
        if (e.key === 'Enter') $('#apply-custom').click();
      });
