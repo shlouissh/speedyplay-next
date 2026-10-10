@@ -1,66 +1,61 @@
-
- // ==UserScript==
- // @name         倍速播放 Next
- // @namespace    https://github.com/shlouissh/speedyplay-next
- // @version      1.1.0
- // @description  HTML5 视频倍速控制：0.1～20 倍、速度记忆、常用速度、拖动面板、动态视频支持；兼容 YouTube Trusted Types
- // @author       shlouissh
- // @license      MIT
- // @icon         https://raw.githubusercontent.com/shlouissh/speedyplay-next/main/speedyplay-icon.png?v=2
- // @match        *://*/*
- // @noframes
- // @grant        none
- // @run-at       document-idle
- // ==/UserScript==
+// ==UserScript==
+// @name         倍速播放 Next
+// @namespace    https://github.com/shlouissh/speedyplay-next
+// @version      1.2.0
+// @description  HTML5 倍速控制：悬停展开、固定窗口、速度记忆、动态视频支持；兼容 YouTube
+// @author       shlouissh
+// @license      MIT
+// @icon         https://raw.githubusercontent.com/shlouissh/speedyplay-next/main/speedyplay-icon.png?v=2
+// @match        *://*/*
+// @noframes
+// @grant        none
+// @run-at       document-idle
+// ==/UserScript==
 
  (() => {
    'use strict';
 
-   // ===== 可自定义的设置 =====
+   // ===== 用户可修改的配置 =====
    const STORAGE_KEY = 'speedyplayNext.settings.v1';
+   const ICON_URL = 'https://raw.githubusercontent.com/shlouissh/speedyplay-next/main/speedyplay-icon.png?v=2';
+   const PANEL_OPACITY = 0.85; // 背景不透明度：0~1
    const MIN_RATE = 0.1;
    const MAX_RATE = 20;
    const MAX_PRESETS = 6;
-   const PANEL_OPACITY = 0.6; // 面板背景不透明度：0～1。0.85 为轻微透明。
    const DEFAULTS = {
      rate: 1,
      previousRate: 1,
-     presets: [1, 1.25, 1.5, 2, 3], // 默认的常用倍速；已保存的设置优先
-     x: null, // null 表示默认靠右
+     presets: [1, 1.25, 1.5, 1.75, 2],
+     x: null,
      y: 100,
-     collapsed: false
+     pinned: false // false：悬停展开，移开折叠；true：始终展开
    };
 
-   // 拒绝在 iframe 中重复运行（@noframes 的附加保险）。
    if (window.top !== window.self) return;
 
    let settings = loadSettings();
    let panelHost = null;
    let shadow = null;
    let reopenButton = null;
-   let observer = null;
+   let hovered = false;
+   let dragging = null;
+   let hiddenByUser = false;
+   let scanQueued = false;
    let lastActiveVideo = null;
-   let dragState = null;
-   let isHiddenByUser = false;
-   let pendingScan = false;
    const trackedVideos = new WeakSet();
 
    function clampRate(value) {
-     if (!Number.isFinite(value)) return 1;
-     return Math.min(MAX_RATE, Math.max(MIN_RATE, Math.round(value * 100) / 100));
+     return Number.isFinite(value)
+       ? Math.min(MAX_RATE, Math.max(MIN_RATE, Math.round(value * 100) / 100)) : 1;
    }
-
-   function formatRate(value) {
-     return `${Number(value.toFixed(2))}×`;
-   }
+   function formatRate(value) { return `${Number(value.toFixed(2))}×`; }
 
    function loadSettings() {
      let saved = {};
      try {
-       saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
-       if (!saved || typeof saved !== 'object' || Array.isArray(saved)) saved = {};
-     } catch (_) { saved = {}; }
-
+       const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) saved = parsed;
+     } catch (_) { /* 本地存储可能不可用 */ }
      const result = { ...DEFAULTS, ...saved };
      result.rate = clampRate(Number(result.rate));
      result.previousRate = clampRate(Number(result.previousRate));
@@ -70,32 +65,30 @@
          ).map(clampRate))].slice(0, MAX_PRESETS)
        : [...DEFAULTS.presets];
      if (!result.presets.length) result.presets = [...DEFAULTS.presets];
-     result.x = Number.isFinite(Number(result.x)) && result.x !== null
-       ? Math.max(0, Number(result.x)) : null;
+     result.x = result.x === null || !Number.isFinite(Number(result.x))
+       ? null : Math.max(0, Number(result.x));
      result.y = Number.isFinite(Number(result.y)) ? Math.max(0, Number(result.y)) : 100;
-     result.collapsed = Boolean(result.collapsed);
+     result.pinned = result.pinned === true;
      return result;
    }
 
    function saveSettings() {
      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(settings)); }
-     catch (_) { /* 某些网页禁止本地存储；此时仅在当前页有效 */ }
+     catch (_) { /* 忽略禁用本地存储的站点 */ }
    }
 
-   function getVideos() {
-     return [...document.querySelectorAll('video')];
-   }
+   function getVideos() { return [...document.querySelectorAll('video')]; }
 
    function applyRate(video, rate) {
-     if (!video || !video.isConnected) return;
+     if (!video?.isConnected) return;
      try {
        if (Math.abs(video.playbackRate - rate) > 0.001) video.playbackRate = rate;
        if (Math.abs(video.defaultPlaybackRate - rate) > 0.001) video.defaultPlaybackRate = rate;
-     } catch (_) { /* 某些特殊播放器不支持指定速度 */ }
+     } catch (_) { /* 某些播放器限制倍速 */ }
    }
 
    function applyRateToAll(rate) {
-     getVideos().forEach(video => applyRate(video, rate));
+     getVideos().forEach(v => applyRate(v, rate));
      if (lastActiveVideo?.isConnected) applyRate(lastActiveVideo, rate);
    }
 
@@ -115,10 +108,10 @@
 
    function togglePreviousRate() {
      const oldRate = settings.rate;
-     const target = settings.previousRate;
-     if (Math.abs(oldRate - target) < 0.001) return;
+     if (Math.abs(oldRate - settings.previousRate) < 0.001) return;
+     const previous = settings.previousRate;
      settings.previousRate = oldRate;
-     setRate(target, false);
+     setRate(previous, false);
    }
 
    function trackVideo(video) {
@@ -128,11 +121,10 @@
        lastActiveVideo = video;
        applyRate(video, settings.rate);
      };
-     video.addEventListener('play', markActive, { passive: true });
-     video.addEventListener('playing', markActive, { passive: true });
-     video.addEventListener('loadedmetadata', markActive, { passive: true });
+     for (const eventName of ['play', 'playing', 'loadedmetadata']) {
+       video.addEventListener(eventName, markActive, { passive: true });
+     }
      video.addEventListener('ratechange', () => {
-       // 有的网站会自行恢复 1 倍速；仅当当前速度不同才尝试纠正。
        if (Math.abs(video.playbackRate - settings.rate) > 0.02) {
          queueMicrotask(() => {
            if (video.isConnected && Math.abs(video.playbackRate - settings.rate) > 0.02) {
@@ -148,7 +140,7 @@
      const videos = getVideos();
      videos.forEach(trackVideo);
      if (videos.length) {
-       if (!panelHost || !panelHost.isConnected) createPanel();
+       if (!panelHost?.isConnected) createPanel();
        updateVisibility(true);
      } else {
        updateVisibility(false);
@@ -156,20 +148,18 @@
    }
 
    function scheduleScan() {
-     if (pendingScan) return;
-     pendingScan = true;
+     if (scanQueued) return;
+     scanQueued = true;
      queueMicrotask(() => {
-       pendingScan = false;
+       scanQueued = false;
        try { scanVideos(); }
-       catch (error) { console.error('[倍速播放 Next] 扫描视频失败', error); }
+       catch (error) { console.error('[倍速播放 Next] 视频扫描失败：', error); }
      });
    }
 
    function observePage() {
      scheduleScan();
-     observer = new MutationObserver(records => {
-       // 我们自身 UI 的增删也会触发 MutationObserver；只在有视频元素
-       // 被增删、或页面主要节点被替换时才重新扫描。
+     new MutationObserver(records => {
        for (const record of records) {
          const changed = [...record.addedNodes, ...record.removedNodes];
          if (changed.some(node => node.nodeType === 1 &&
@@ -178,17 +168,14 @@
            return;
          }
        }
-     });
-     observer.observe(document.documentElement, { childList: true, subtree: true });
-     // YouTube 是单页应用：跳转时再扫描一次。
+     }).observe(document.documentElement, { childList: true, subtree: true });
      window.addEventListener('popstate', () => setTimeout(scheduleScan, 150));
      window.addEventListener('pageshow', scheduleScan);
      document.addEventListener('yt-navigate-finish', () => setTimeout(scheduleScan, 150));
    }
 
-   // 只用 DOM API 构造元素，不使用 innerHTML / insertAdjacentHTML。
-   // YouTube 的 Trusted Types 策略会阻止不可信字符串写入 innerHTML。
-   function element(tag, attrs = {}, children = []) {
+   // 安全地构造 DOM，避免 YouTube 的 Trusted Types 拦截 innerHTML。
+   function el(tag, attrs = {}, children = []) {
      const node = document.createElement(tag);
      for (const [key, value] of Object.entries(attrs)) {
        if (key === 'text') node.textContent = String(value);
@@ -200,143 +187,175 @@
      }
      return node;
    }
+   function btn(id, label, title = '') {
+     return el('button', { id, type: 'button', text: label, title });
+   }
+   function $(selector) { return shadow?.querySelector(selector); }
 
-   function button(id, label, title = '') {
-     const attrs = { id, type: 'button', text: label };
-     if (title) attrs.title = title;
-     return element('button', attrs);
+   // ===== 新折叠逻辑 =====
+   // 未固定时：鼠标离开自动折叠，鼠标进入自动展开。
+   // 固定后：始终展开，直到再次点击「取消固定」。
+   function updatePanelMode() {
+     if (!shadow) return;
+     const expanded = settings.pinned || hovered || !!dragging;
+     $('.panel').classList.toggle('compact', !expanded);
+     $('.panel').classList.toggle('expanded', expanded);
+     $('#pin').textContent = settings.pinned ? '取消固定' : '固定窗口';
+     $('#pin').title = settings.pinned ? '取消固定，恢复鼠标悬停展开' : '固定窗口，始终保持展开';
+     // 窗口宽度改变后，重新校正屏幕范围。
+     placePanel();
    }
 
    function createPanel() {
      if (panelHost?.isConnected) return;
-     // 创建失败时允许下一次重试，不保留半成品引用。
-     panelHost = null;
-     shadow = null;
+     let host = null;
      try {
-       const host = document.createElement('div');
-       host.id = 'speedyplay-next-host';
-       host.style.cssText = 'position:fixed;z-index:2147483647;left:0;top:0;';
+       host = el('div', { id: 'speedyplay-next-host' });
+       host.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483647;';
        const root = host.attachShadow({ mode: 'open' });
-
-       const style = document.createElement('style');
+       const style = el('style');
        style.textContent = `
          :host { all: initial; }
          *, *::before, *::after { box-sizing: border-box; }
          .panel {
-           position: fixed; width: 260px; color: #f5f5f5;
-           background: rgba(27, 29, 34, ${PANEL_OPACITY});
-           border: 1px solid rgba(255,255,255,.16);
-           border-radius: 12px; box-shadow: 0 8px 28px rgba(0,0,0,.28);
-           font: 13px/1.4 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-           overflow: hidden; user-select: none; backdrop-filter: blur(10px);
-           z-index: 2147483647;
+           position: fixed; width: 260px; top:100px;
+           color:#f5f5f5; background:rgba(27,29,34,${PANEL_OPACITY});
+           border:1px solid rgba(255,255,255,.16); border-radius:12px;
+           box-shadow:0 8px 28px rgba(0,0,0,.28);
+           font:13px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;
+           overflow:hidden; user-select:none; backdrop-filter:blur(10px);
+           z-index:2147483647;
          }
+         .panel.compact { width:108px; height:52px; border-radius:10px; }
+         .compact-bar { display:none; width:100%; height:100%; align-items:center;
+           justify-content:center; gap:4px; padding:4px; cursor:pointer; }
+         .panel.compact .compact-bar { display:flex; }
+         .panel.compact .expanded-content { display:none; }
+         .compact-tile { display:flex; align-items:center; justify-content:center;
+           width:44px; height:44px; flex:none; border-radius:7px;
+           background:rgba(255,255,255,.09); }
+         .compact-tile img { width:35px; height:35px; object-fit:contain; }
+         .compact-rate { font-size:13px; font-weight:750; white-space:nowrap; }
          .header { display:flex; align-items:center; justify-content:space-between;
-           gap:8px; padding:10px 11px; background:rgba(255,255,255,.06); cursor:move; }
-         .brand { font-weight:700; letter-spacing:.2px; }
-         .header-actions { display:flex; gap:5px; }
+           gap:6px; padding:10px 11px; background:rgba(255,255,255,.06); cursor:move; }
+         .brand { font-weight:700; letter-spacing:.2px; white-space:nowrap; }
+         .header-actions { display:flex; gap:5px; align-items:center; }
          button { font:inherit; color:inherit; border:1px solid rgba(255,255,255,.16);
-           background:rgba(255,255,255,.08); border-radius:7px; padding:5px 8px;
-           cursor:pointer; }
+           background:rgba(255,255,255,.08); border-radius:7px;
+           padding:5px 8px; cursor:pointer; }
          button:hover { background:rgba(255,255,255,.16); }
          button:focus-visible, input:focus-visible { outline:2px solid #8ab4ff; outline-offset:2px; }
+         #pin { white-space:nowrap; font-size:11px; }
          .body { padding:11px; display:grid; gap:10px; }
-         .rate-row { display:flex; align-items:center; justify-content:space-between; gap:8px; }
-         .rate { font-size:24px; font-weight:750; letter-spacing:-.5px; cursor:pointer; }
+         .rate-row { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+         .rate { font-size:24px; font-weight:750; cursor:pointer; }
          .small { color:#b9bdc7; font-size:11px; }
-         .controls { display:flex; align-items:center; gap:6px; }
+         .controls { display:flex; gap:6px; }
          .controls button { flex:1; }
          input[type=range] { width:100%; accent-color:#8ab4ff; margin:0; }
          .presets { display:flex; flex-wrap:wrap; gap:6px; }
          .presets button { min-width:46px; flex:1; }
          .presets button.active { border-color:#8ab4ff; background:rgba(138,180,255,.2); }
-         .footer { display:flex; justify-content:space-between; align-items:center; gap:8px; }
-         .hidden { display:none !important; }
          .edit-row { display:flex; gap:6px; align-items:center; }
          .edit-row input { width:70px; min-width:0; color:#f5f5f5; background:#17191d;
            border:1px solid #555b66; border-radius:6px; padding:6px; }
-         @media (max-width:420px) { .panel { width:238px; } }
+         .footer { display:flex; justify-content:space-between; align-items:center; gap:8px; }
        `;
        root.appendChild(style);
 
-       const panel = element('section', { class: 'panel', 'aria-label': '倍速播放控制面板' }, [
-         element('div', { class: 'header', id: 'drag-handle' }, [
-           element('span', { class: 'brand', text: '倍速播放 Next' }),
-           element('div', { class: 'header-actions' }, [
-             button('collapse', '−', '折叠面板'),
-             button('hide', '×', '隐藏面板')
+       const compactBar = el('div', { class: 'compact-bar', id: 'compact-bar', title: '鼠标悬停展开；点击固定展开' }, [
+         el('div', { class: 'compact-tile' }, [el('img', { src: ICON_URL, alt: '倍速播放 Next 图标' })]),
+         el('div', { class: 'compact-tile compact-rate', id: 'compact-rate', text: '1×' })
+       ]);
+       const expandedContent = el('div', { class: 'expanded-content' }, [
+         el('div', { class: 'header', id: 'drag-handle' }, [
+           el('span', { class: 'brand', text: '倍速播放 Next' }),
+           el('div', { class: 'header-actions' }, [
+             btn('pin', '固定窗口', '固定窗口，始终保持展开'),
+             btn('hide', '×', '隐藏面板')
            ])
          ]),
-         element('div', { class: 'body', id: 'body' }, [
-           element('div', { class: 'rate-row' }, [
-             element('div', {}, [
-               element('div', { class: 'small', text: '当前速度' }),
-               element('div', { class: 'rate', id: 'rate', text: '1×', title: '双击切换上次速度' })
+         el('div', { class: 'body' }, [
+           el('div', { class: 'rate-row' }, [
+             el('div', {}, [
+               el('div', { class: 'small', text: '当前速度' }),
+               el('div', { class: 'rate', id: 'rate', title: '双击切换上次速度', text: '1×' })
              ]),
-             button('toggle', '切换上次', '切换到上一次使用的速度')
+             btn('toggle', '切换上次')
            ]),
-           element('input', {
-             id: 'slider', type: 'range', min: '0.1', max: '4', step: '0.1',
-             value: '1', 'aria-label': '播放速度'
-           }),
-           element('div', { class: 'controls' }, [
-             button('minus', '− 0.1'), button('normal', '1× 正常'), button('plus', '+ 0.1')
+           el('input', { id: 'slider', type: 'range', min: '0.1', max: '4', step: '0.1', value: '1' }),
+           el('div', { class: 'controls' }, [
+             btn('minus', '− 0.1'), btn('normal', '1× 正常'), btn('plus', '+ 0.1')
            ]),
-           element('div', { class: 'small', text: `常用速度（最多 ${MAX_PRESETS} 个）` }),
-           element('div', { class: 'presets', id: 'presets' }),
-           element('div', { class: 'edit-row' }, [
-             element('input', {
-               id: 'custom', type: 'number', min: '0.1', max: '20', step: '0.1',
-               value: '1', 'aria-label': '自定义速度'
-             }),
-             button('apply-custom', '应用'), button('add-preset', '＋常用')
+           el('div', { class: 'small', text: `常用速度（最多 ${MAX_PRESETS} 个）` }),
+           el('div', { class: 'presets', id: 'presets' }),
+           el('div', { class: 'edit-row' }, [
+             el('input', { id: 'custom', type: 'number', min: '0.1', max: '20', step: '0.1', value: '1' }),
+             btn('apply-custom', '应用'), btn('add-preset', '＋常用')
            ]),
-           element('div', { class: 'footer' }, [
-             element('span', { class: 'small', id: 'status', text: '自动应用到页面视频' }),
-             button('reset', '重置位置')
+           el('div', { class: 'footer' }, [
+             el('span', { class: 'small', id: 'status', text: '自动应用到页面视频' }),
+             btn('reset', '重置位置')
            ])
          ])
        ]);
-       root.appendChild(panel);
+       root.appendChild(el('section', { class: 'panel expanded' }, [compactBar, expandedContent]));
        document.documentElement.appendChild(host);
        panelHost = host;
        shadow = root;
        bindUI();
-       placePanel();
        updateUI();
+       updatePanelMode();
      } catch (error) {
-       panelHost?.remove();
+       host?.remove();
        panelHost = null;
        shadow = null;
        console.error('[倍速播放 Next] 创建面板失败：', error);
      }
    }
 
-   function $(selector) { return shadow?.querySelector(selector); }
-
    function bindUI() {
+     const panel = $('.panel');
+     // pointerenter / pointerleave 不会因在面板内部按钮之间移动而反复触发。
+     panel.addEventListener('pointerenter', event => {
+       if (event.pointerType === 'mouse' || event.pointerType === 'pen') {
+         hovered = true;
+         updatePanelMode();
+       }
+     });
+     panel.addEventListener('pointerleave', () => {
+       if (dragging) return;
+       hovered = false;
+       updatePanelMode();
+     });
+     // 触屏设备没有鼠标悬停；点击折叠条也可以固定展开。
+     $('#compact-bar').addEventListener('click', () => {
+       settings.pinned = true;
+       saveSettings();
+       updatePanelMode();
+     });
+     $('#pin').addEventListener('click', () => {
+       settings.pinned = !settings.pinned;
+       saveSettings();
+       updatePanelMode();
+     });
+     $('#hide').addEventListener('click', () => {
+       hiddenByUser = true;
+       updateVisibility(getVideos().length > 0);
+     });
      $('#minus').addEventListener('click', () => setRate(Math.max(MIN_RATE, settings.rate - 0.1)));
      $('#plus').addEventListener('click', () => setRate(Math.min(MAX_RATE, settings.rate + 0.1)));
      $('#normal').addEventListener('click', () => setRate(1));
      $('#toggle').addEventListener('click', togglePreviousRate);
      $('#rate').addEventListener('dblclick', togglePreviousRate);
-     $('#slider').addEventListener('input', event => setRate(Number(event.target.value)));
+     $('#slider').addEventListener('input', e => setRate(Number(e.target.value)));
      $('#apply-custom').addEventListener('click', () => {
        if (!setRate($('#custom').value)) $('#status').textContent = '请输入 0.1～20 之间的速度';
      });
-     $('#custom').addEventListener('keydown', event => {
-       if (event.key === 'Enter') $('#apply-custom').click();
+     $('#custom').addEventListener('keydown', e => {
+       if (e.key === 'Enter') $('#apply-custom').click();
      });
      $('#add-preset').addEventListener('click', addPreset);
-     $('#collapse').addEventListener('click', () => {
-       settings.collapsed = !settings.collapsed;
-       saveSettings();
-       updateUI();
-     });
-     $('#hide').addEventListener('click', () => {
-       isHiddenByUser = true;
-       updateVisibility(getVideos().length > 0);
-     });
      $('#reset').addEventListener('click', () => {
        settings.x = null;
        settings.y = 100;
@@ -356,12 +375,12 @@
        return;
      }
      const rate = clampRate(value);
-     if (settings.presets.some(n => Math.abs(n - rate) < 0.001)) {
-       $('#status').textContent = '这个速度已经在常用列表中';
+     if (settings.presets.includes(rate)) {
+       $('#status').textContent = '这个速度已在常用列表中';
        return;
      }
      if (settings.presets.length >= MAX_PRESETS) {
-       $('#status').textContent = `常用速度最多保存 ${MAX_PRESETS} 个，请先移除一个`;
+       $('#status').textContent = `最多保存 ${MAX_PRESETS} 个，请先右键移除一个`;
        return;
      }
      settings.presets.push(rate);
@@ -374,18 +393,18 @@
      const container = $('#presets');
      if (!container) return;
      container.replaceChildren();
-     settings.presets.forEach(value => {
-       const item = button('', formatRate(value), '点击应用；右键移除此常用速度');
+     settings.presets.forEach(rate => {
+       const item = btn('', formatRate(rate), '点击应用，右键删除');
        item.removeAttribute('id');
-       if (Math.abs(value - settings.rate) < 0.001) item.classList.add('active');
-       item.addEventListener('click', () => setRate(value));
+       if (Math.abs(rate - settings.rate) < 0.001) item.classList.add('active');
+       item.addEventListener('click', () => setRate(rate));
        item.addEventListener('contextmenu', event => {
          event.preventDefault();
          if (settings.presets.length <= 1) {
            $('#status').textContent = '至少保留一个常用速度';
            return;
          }
-         settings.presets = settings.presets.filter(n => Math.abs(n - value) >= 0.001);
+         settings.presets = settings.presets.filter(v => v !== rate);
          saveSettings();
          renderPresets();
        });
@@ -396,79 +415,69 @@
    function updateUI() {
      if (!shadow) return;
      $('#rate').textContent = formatRate(settings.rate);
+     $('#compact-rate').textContent = formatRate(settings.rate);
      $('#custom').value = String(settings.rate);
      $('#slider').value = String(Math.min(4, settings.rate));
-     $('#slider').title = '滑块支持 0.1～4 倍；更高倍速请在输入框中填写';
-     $('#collapse').textContent = settings.collapsed ? '+' : '−';
-     $('#body').classList.toggle('hidden', settings.collapsed);
      renderPresets();
+     if (reopenButton?.isConnected) reopenButton.textContent = `倍速 ${formatRate(settings.rate)}`;
    }
 
    function placePanel() {
      const panel = $('.panel');
      if (!panel) return;
      const width = panel.offsetWidth || 260;
-     const height = panel.offsetHeight || 40;
+     const height = panel.offsetHeight || 52;
      if (settings.x === null) {
        panel.style.left = 'auto';
        panel.style.right = '18px';
      } else {
-       const x = Math.max(0, Math.min(settings.x, Math.max(0, window.innerWidth - width)));
-       panel.style.left = `${x}px`;
+       // 对已有绝对坐标限制范围，但不因折叠宽度变化覆盖用户保存的位置。
+       panel.style.left = `${Math.max(0, Math.min(settings.x, Math.max(0, innerWidth - width)))}px`;
        panel.style.right = 'auto';
      }
-     const y = Math.max(0, Math.min(settings.y, Math.max(0, window.innerHeight - height)));
-     panel.style.top = `${y}px`;
+     panel.style.top = `${Math.max(0, Math.min(settings.y, Math.max(0, innerHeight - height)))}px`;
    }
 
    function startDrag(event) {
      if (event.button !== 0 || event.target.closest('button')) return;
      const rect = $('.panel').getBoundingClientRect();
-     dragState = {
-       pointerId: event.pointerId, startX: event.clientX, startY: event.clientY,
-       x: rect.left, y: rect.top
-     };
+     dragging = { id: event.pointerId, clientX: event.clientX, clientY: event.clientY,
+       x: rect.left, y: rect.top };
      event.currentTarget.setPointerCapture?.(event.pointerId);
      event.preventDefault();
    }
-
    function moveDrag(event) {
-     if (!dragState || event.pointerId !== dragState.pointerId) return;
+     if (!dragging || event.pointerId !== dragging.id) return;
      const panel = $('.panel');
-     settings.x = Math.max(0, Math.min(
-       window.innerWidth - panel.offsetWidth,
-       dragState.x + event.clientX - dragState.startX
-     ));
-     settings.y = Math.max(0, Math.min(
-       window.innerHeight - panel.offsetHeight,
-       dragState.y + event.clientY - dragState.startY
-     ));
+     settings.x = Math.max(0, Math.min(Math.max(0, innerWidth - panel.offsetWidth),
+       dragging.x + event.clientX - dragging.clientX));
+     settings.y = Math.max(0, Math.min(Math.max(0, innerHeight - panel.offsetHeight),
+       dragging.y + event.clientY - dragging.clientY));
      placePanel();
    }
-
    function endDrag(event) {
-     if (!dragState || (event && event.pointerId !== dragState.pointerId)) return;
-     dragState = null;
+     if (!dragging || event.pointerId !== dragging.id) return;
+     dragging = null;
      saveSettings();
+     hovered = $('.panel')?.matches(':hover') || false;
+     updatePanelMode();
    }
 
    function showReopenButton() {
      if (reopenButton?.isConnected) return;
-     const smallButton = document.createElement('button');
-     smallButton.type = 'button';
-     smallButton.textContent = `倍速 ${formatRate(settings.rate)}`;
-     smallButton.title = '重新显示倍速播放面板';
-     smallButton.style.cssText =
-       'position:fixed;left:18px;top:18px;right:auto;bottom:auto;z-index:2147483647;' +
-       'padding:8px 12px;border:0;border-radius:20px;' +
-       'background:rgba(32,36,44,.92);color:#fff;font:13px system-ui;' +
-       'box-shadow:0 2px 10px #0005;cursor:pointer;';
-     smallButton.addEventListener('click', () => {
-       isHiddenByUser = false;
+     const button = el('button', { type: 'button', title: '重新显示倍速面板' });
+     button.textContent = `倍速 ${formatRate(settings.rate)}`;
+     button.style.cssText = 'position:fixed;left:18px;top:18px;z-index:2147483647;' +
+       'padding:8px 12px;border:0;border-radius:20px;background:rgba(32,36,44,.92);' +
+       'color:white;font:13px system-ui;box-shadow:0 2px 10px #0005;cursor:pointer;';
+     button.addEventListener('click', () => {
+       hiddenByUser = false;
+       hovered = false;
        updateVisibility(getVideos().length > 0);
+       updatePanelMode();
      });
-     document.documentElement.appendChild(smallButton);
-     reopenButton = smallButton;
+     document.documentElement.appendChild(button);
+     reopenButton = button;
    }
 
    function updateVisibility(hasVideo) {
@@ -478,7 +487,7 @@
        reopenButton = null;
        return;
      }
-     if (isHiddenByUser) {
+     if (hiddenByUser) {
        if (panelHost) panelHost.style.display = 'none';
        showReopenButton();
      } else {
@@ -494,7 +503,6 @@
      applyRateToAll(settings.rate);
      window.addEventListener('resize', placePanel);
    }
-
    if (document.readyState === 'loading') {
      document.addEventListener('DOMContentLoaded', init, { once: true });
    } else {
