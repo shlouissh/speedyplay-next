@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         倍速播放 Next
 // @namespace    https://github.com/shlouissh/speedyplay-next
-// @version      1.2.0
+// @version      1.2.1
 // @description  HTML5 倍速控制：悬停展开、固定窗口、速度记忆、动态视频支持；兼容 YouTube
 // @author       shlouissh
 // @license      MIT
@@ -34,6 +34,9 @@
    if (window.top !== window.self) return;
 
    let settings = loadSettings();
+   // 当前正在编辑的常用速度索引
+   // null 表示没有选中预设
+   let selectedPresetIndex = null;
    let panelHost = null;
    let shadow = null;
    let reopenButton = null;
@@ -350,7 +353,42 @@
      $('#rate').addEventListener('dblclick', togglePreviousRate);
      $('#slider').addEventListener('input', e => setRate(Number(e.target.value)));
      $('#apply-custom').addEventListener('click', () => {
-       if (!setRate($('#custom').value)) $('#status').textContent = '请输入 0.1～20 之间的速度';
+       const value = Number($('#custom').value);
+     
+       if (!Number.isFinite(value) || value < MIN_RATE || value > MAX_RATE) {
+         $('#status').textContent = '请输入 0.1～20 之间的速度';
+         return;
+       }
+     
+       const rate = clampRate(value);
+     
+       // 如果之前选中了一个常用速度，就更新对应的预设
+       if (selectedPresetIndex !== null &&
+           selectedPresetIndex < settings.presets.length) {
+     
+         // 避免把其他预设修改成重复的速度
+         const duplicate = settings.presets.some(
+           (preset, index) =>
+             index !== selectedPresetIndex &&
+             Math.abs(preset - rate) < 0.001
+         );
+     
+         if (duplicate) {
+           $('#status').textContent = '常用速度中已经存在这个倍速';
+           return;
+         }
+     
+         settings.presets[selectedPresetIndex] = rate;
+         saveSettings();
+     
+         setRate(rate);
+         $('#status').textContent = '已更新选中的常用速度';
+       } else {
+         // 没有选中预设：保持原来的功能，只修改当前播放速度
+         setRate(rate);
+         $('#status').textContent = '已应用播放速度';
+       }
+     });
      });
      $('#custom').addEventListener('keydown', e => {
        if (e.key === 'Enter') $('#apply-custom').click();
@@ -392,22 +430,51 @@
    function renderPresets() {
      const container = $('#presets');
      if (!container) return;
+   
      container.replaceChildren();
-     settings.presets.forEach(rate => {
-       const item = btn('', formatRate(rate), '点击应用，右键删除');
+   
+     settings.presets.forEach((rate, index) => {
+       const item = btn(
+         '',
+         formatRate(rate),
+         '点击选中并应用；右键删除'
+       );
+   
        item.removeAttribute('id');
-       if (Math.abs(rate - settings.rate) < 0.001) item.classList.add('active');
-       item.addEventListener('click', () => setRate(rate));
+   
+       // 用高亮效果标记当前选中的预设
+       if (selectedPresetIndex === index) {
+         item.classList.add('active');
+       }
+   
+       // 点击预设：记录选中项并应用速度
+       item.addEventListener('click', () => {
+         selectedPresetIndex = index;
+         setRate(rate);
+       });
+   
+       // 右键删除预设
        item.addEventListener('contextmenu', event => {
          event.preventDefault();
+   
          if (settings.presets.length <= 1) {
            $('#status').textContent = '至少保留一个常用速度';
            return;
          }
-         settings.presets = settings.presets.filter(v => v !== rate);
+   
+         settings.presets.splice(index, 1);
+   
+         // 删除后修正选中位置
+         if (selectedPresetIndex === index) {
+           selectedPresetIndex = null;
+         } else if (selectedPresetIndex > index) {
+           selectedPresetIndex--;
+         }
+   
          saveSettings();
          renderPresets();
        });
+   
        container.appendChild(item);
      });
    }
