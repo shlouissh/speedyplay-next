@@ -1,9 +1,16 @@
 # 倍速播放 Next
+## 安装脚本
+
+**[🚀 点击安装 倍速播放 Next](https://github.com/shlouissh/speedyplay-next/raw/refs/heads/main/SpeedyPlay-Next.user.js)**
+
+安装前请先确保浏览器中已经安装并启用 [Tampermonkey](https://www.tampermonkey.net/)。
+
+点击上面的链接后，如果 Tampermonkey 弹出脚本安装页面，点击「安装」即可。
 
 > 本脚本的功能思路参考了黄盐开发的《倍速播放（SpeedyPlay）》，感谢原作者提供了优秀的功能设计。
 >
 > 原脚本链接：
-> [倍速播放（SpeedyPlay）](https://greasyfork.org/zh-CN/scripts/383265-%E5%80%8D%E9%80%9F%E6%92%AD%E6%94%BE)
+> [倍速播放（SpeedyPlay）v1.0已失效](https://greasyfork.org/zh-CN/scripts/383265-%E5%80%8D%E9%80%9F%E6%92%AD%E6%94%BE)
 
 ## 功能
 
