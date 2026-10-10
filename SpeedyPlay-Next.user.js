@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         倍速播放 Next
 // @namespace    https://github.com/shlouissh/speedyplay-next
-// @version      1.2.1
+// @version      1.2.2
 // @description  HTML5 倍速控制：悬停展开、固定窗口、速度记忆、动态视频支持；兼容 YouTube
 // @author       shlouissh
 // @license      MIT
@@ -214,14 +214,14 @@
      let host = null;
      try {
        host = el('div', { id: 'speedyplay-next-host' });
-       host.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483647;';
+       host.style.cssText = 'position:absolute;left:0;top:0;z-index:2147483647;';
        const root = host.attachShadow({ mode: 'open' });
        const style = el('style');
        style.textContent = `
          :host { all: initial; }
          *, *::before, *::after { box-sizing: border-box; }
          .panel {
-           position: fixed; width: 260px; top:100px;
+           position: absolute; width: 260px; top:100px;
            color:#f5f5f5; background:rgba(27,29,34,${PANEL_OPACITY});
            border:1px solid rgba(255,255,255,.16); border-radius:12px;
            box-shadow:0 8px 28px rgba(0,0,0,.28);
@@ -493,34 +493,52 @@
    function placePanel() {
      const panel = $('.panel');
      if (!panel) return;
+   
      const width = panel.offsetWidth || 260;
-     const height = panel.offsetHeight || 52;
+     const docWidth = Math.max(
+       document.documentElement.scrollWidth,
+       document.documentElement.clientWidth
+     );
+   
      if (settings.x === null) {
-       panel.style.left = 'auto';
-       panel.style.right = '18px';
+       panel.style.left = `${Math.max(0, docWidth - width - 18)}px`;
      } else {
-       // 对已有绝对坐标限制范围，但不因折叠宽度变化覆盖用户保存的位置。
-       panel.style.left = `${Math.max(0, Math.min(settings.x, Math.max(0, innerWidth - width)))}px`;
-       panel.style.right = 'auto';
+       panel.style.left = `${Math.max(0, settings.x)}px`;
      }
-     panel.style.top = `${Math.max(0, Math.min(settings.y, Math.max(0, innerHeight - height)))}px`;
+   
+     panel.style.right = 'auto';
+     panel.style.top = `${Math.max(0, settings.y)}px`;
    }
 
    function startDrag(event) {
      if (event.button !== 0 || event.target.closest('button')) return;
+   
      const rect = $('.panel').getBoundingClientRect();
-     dragging = { id: event.pointerId, clientX: event.clientX, clientY: event.clientY,
-       x: rect.left, y: rect.top };
+   
+     dragging = {
+       id: event.pointerId,
+       pageX: event.pageX,
+       pageY: event.pageY,
+       x: rect.left + window.scrollX,
+       y: rect.top + window.scrollY
+     };
+   
      event.currentTarget.setPointerCapture?.(event.pointerId);
      event.preventDefault();
    }
    function moveDrag(event) {
      if (!dragging || event.pointerId !== dragging.id) return;
-     const panel = $('.panel');
-     settings.x = Math.max(0, Math.min(Math.max(0, innerWidth - panel.offsetWidth),
-       dragging.x + event.clientX - dragging.clientX));
-     settings.y = Math.max(0, Math.min(Math.max(0, innerHeight - panel.offsetHeight),
-       dragging.y + event.clientY - dragging.clientY));
+   
+     settings.x = Math.max(
+       0,
+       dragging.x + event.pageX - dragging.pageX
+     );
+   
+     settings.y = Math.max(
+       0,
+       dragging.y + event.pageY - dragging.pageY
+     );
+   
      placePanel();
    }
    function endDrag(event) {
