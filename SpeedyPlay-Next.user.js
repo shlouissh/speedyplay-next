@@ -390,6 +390,7 @@
        }
      });
 
+    
      $('#custom').addEventListener('keydown', e => {
        if (e.key === 'Enter') $('#apply-custom').click();
      });
