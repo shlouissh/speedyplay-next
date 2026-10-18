@@ -566,29 +566,69 @@
      reopenButton = button;
    }
 
-   function updateVisibility(hasVideo) {
-     if (!hasVideo) {
-       if (panelHost) panelHost.style.display = 'none';
-       reopenButton?.remove();
-       reopenButton = null;
-       return;
-     }
-     if (hiddenByUser) {
-       if (panelHost) panelHost.style.display = 'none';
-       showReopenButton();
-     } else {
-       if (panelHost) panelHost.style.display = '';
-       reopenButton?.remove();
-       reopenButton = null;
-     }
-   }
+    function updateVisibility(hasVideo) {
+      // 检测浏览器是否处于网页全屏模式
+      const isFullscreen = Boolean(
+        document.fullscreenElement ||
+        document.webkitFullscreenElement
+      );
+    
+      // 全屏时隐藏整个控制器，包括缩略面板和恢复按钮
+      if (isFullscreen) {
+        if (panelHost) panelHost.style.display = 'none';
+        if (reopenButton) reopenButton.style.display = 'none';
+        return;
+      }
+    
+      // 退出全屏后，恢复按钮的正常显示状态
+      if (reopenButton) {
+        reopenButton.style.display = '';
+      }
+    
+      // 页面没有视频时，不显示控制器
+      if (!hasVideo) {
+        if (panelHost) panelHost.style.display = 'none';
+        reopenButton?.remove();
+        reopenButton = null;
+        return;
+      }
+    
+      // 用户主动隐藏面板
+      if (hiddenByUser) {
+        if (panelHost) panelHost.style.display = 'none';
+        showReopenButton();
+      } else {
+        // 正常显示面板
+        if (panelHost) panelHost.style.display = '';
+        reopenButton?.remove();
+        reopenButton = null;
+      }
+    }
 
-   function init() {
-     if (!document.documentElement) return;
-     observePage();
-     applyRateToAll(settings.rate);
-     window.addEventListener('resize', placePanel);
-   }
+    function init() {
+      if (!document.documentElement) return;
+    
+      observePage();
+      applyRateToAll(settings.rate);
+    
+      window.addEventListener('resize', placePanel);
+    
+      // 进入或退出全屏时，自动更新控制器显示状态
+      const handleFullscreenChange = () => {
+        updateVisibility(getVideos().length > 0);
+      };
+    
+      document.addEventListener(
+        'fullscreenchange',
+        handleFullscreenChange
+      );
+    
+      // 兼容部分浏览器
+      document.addEventListener(
+        'webkitfullscreenchange',
+        handleFullscreenChange
+      );
+    }
    if (document.readyState === 'loading') {
      document.addEventListener('DOMContentLoaded', init, { once: true });
    } else {
