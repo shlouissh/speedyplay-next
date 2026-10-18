@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         倍速播放 Next
 // @namespace    https://github.com/shlouissh/speedyplay-next
-// @version      1.2.2
+// @version      1.2.3
 // @description  HTML5 倍速控制：悬停展开、固定窗口、速度记忆、动态视频支持；兼容 YouTube
 // @author       shlouissh
 // @license      MIT
